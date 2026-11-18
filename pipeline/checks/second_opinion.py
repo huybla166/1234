@@ -40,5 +40,99 @@ from ..model_cache import get_preds  # noqa: F401
 
 
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+
+    rules = cfg["second_opinion"]
+    issues = []
+
+    for image_path in ds.image_files():
+        stem = image_path.stem
+        if stem not in preds or not ds.label_path(stem).exists():
+            continue
+        size = ds.image_size(stem)
+        if size is None:
+            continue
+        image_width, image_height = size
+
+        # Keep original label line numbers while applying the same parse/class
+        # validity rules as Dataset.valid_boxes().
+        labels = []  # (class_id, box, source_line)
+        for line_no, text in ds.read_label_lines(stem) or []:
+            try:
+                class_id, cx, cy, width, height = parse_yolo_line(text)
+            except (ValueError, OverflowError):
+                continue
+            if 0 <= class_id < len(ds.classes):
+                labels.append((class_id, (cx, cy, width, height), line_no))
+
+        parsed_preds = []  # (class_id, confidence, box)
+        for row in preds[stem]:
+            try:
+                class_id = int(row[0])
+                confidence = float(row[1])
+                cx, cy, width, height = (float(v) for v in row[2:6])
+            except (TypeError, ValueError, IndexError, OverflowError):
+                continue
+            values = (confidence, cx, cy, width, height)
+            if len(row) < 6 or any(v != v or v in (float("inf"), float("-inf")) for v in values):
+                continue
+            parsed_preds.append((class_id, confidence, (cx, cy, width, height)))
+
+        active_preds = [
+            pred for pred in parsed_preds
+            if pred[1] >= rules["conf"]
+            and pred[2][2] * image_width * pred[2][3] * image_height >= rules["min_area_px"]
+        ]
+        false_pos_preds = [pred for pred in parsed_preds if pred[1] >= rules["fp_conf"]]
+
+        # One semantic warning at most per prediction, preserving prediction order.
+        for class_id, confidence, box in active_preds:
+            overlaps = [
+                (label_class, iou_xywh(box, label_box))
+                for label_class, label_box, _ in labels
+            ]
+            cands = [(label_class, iou) for label_class, iou in overlaps if iou >= rules["iou_missing"]]
+            if not cands:
+                issues.append(Issue(
+                    "second_opinion", WARN, "POSSIBLE_MISSING", stem,
+                    f"model thấy lớp {class_id} (conf {confidence:.3f}) nhưng không có box nhãn khớp",
+                    extra={"conf": confidence},
+                ))
+                continue
+
+            same_class = [iou for label_class, iou in cands if label_class == class_id]
+            if same_class:
+                best_iou = max(same_class)
+                if best_iou < rules["iou_loose"]:
+                    issues.append(Issue(
+                        "second_opinion", WARN, "POSSIBLE_LOOSE_BOX", stem,
+                        f"box cùng lớp khớp lỏng (IoU {best_iou:.3f})",
+                        extra={"conf": confidence, "iou": best_iou},
+                    ))
+                continue
+
+            other_class = [iou for label_class, iou in cands if label_class != class_id]
+            if other_class and max(other_class) >= rules["iou_match"]:
+                best_iou = max(other_class)
+                issues.append(Issue(
+                    "second_opinion", WARN, "POSSIBLE_WRONG_CLASS", stem,
+                    f"model lớp {class_id} không khớp lớp nhãn gần vị trí này (IoU {best_iou:.3f})",
+                    extra={"conf": confidence, "iou": best_iou},
+                ))
+
+        # False positives use fp_conf and every prediction box, without the
+        # minimum-area filter used for the missing/loose/wrong-class checks.
+        for label_class, label_box, line_no in labels:
+            best_iou = max(
+                (iou_xywh(label_box, pred_box) for _, _, pred_box in false_pos_preds),
+                default=0.0,
+            )
+            if best_iou < rules["iou_missing"]:
+                issues.append(Issue(
+                    "second_opinion", WARN, "POSSIBLE_FALSE_POS", stem,
+                    f"nhãn lớp {label_class} ở dòng {line_no} không khớp dự đoán nào của model",
+                    line=line_no, extra={"iou": best_iou},
+                ))
+
+    return issues

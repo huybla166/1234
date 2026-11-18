@@ -31,6 +31,10 @@ Chưa train: ghi "chưa chạy" và lý do, rồi bỏ qua phần còn lại c�
 TODO(học viên): chênh mAP50 (clean − raw) so với **độ lệch chuẩn giữa các seed**; kết luận **trung thực** (nằm trong nhiễu thì nói là chưa kết luận được); ≥ 2 giả thuyết giải thích (ảnh trùng/rò rỉ test trong `raw`, nhãn máy còn lại trong `clean`, test chỉ 100 ảnh…) và cách kiểm.
 
 ## 6. Quyết định và ghi chú AI
-TODO(học viên): (a) quyết định cuối; nếu Hold/Rework cần làm gì để thành Release? (b) Dùng AI viết code? Ghi 3 dòng: prompt chính, cách bạn kiểm code AI, 1 lần AI sai. Không dùng: ghi "không dùng".
+TODO(học viên): (a) quyết định cuối; nếu Hold/Rework cần làm gì để thành Release?
+
+- Prompt chính: Hoàn tất bốn stub B2 đúng docstring và test; giữ nguyên `data/raw`, dùng ngưỡng từ config, trả về `Issue`/fix log đúng định dạng.
+- Kiểm code AI: đọc diff và các quy tắc sửa file; chạy 4 test mục tiêu, toàn bộ 79 test, thêm ca box vừa tràn vừa trùng, dòng trống và nhiều dự đoán; chạy pipeline và xem 12 ảnh đầu hàng đợi.
+- AI sai: lần đầu đặt kỳ vọng tâm box sau khi cắt `x=0.95, w=0.2` là `0.90`; phép tính trên đoạn `[0.85, 1]` cho `0.925`, assertion bắt lỗi và mình sửa kỳ vọng.
 
 *(Thưởng +2, tùy chọn)* CVAT: lọc `width < 20`, ảnh/số box khớp, đối chiếu `BOX_TINY` (xem docs/CVAT_FILTER.md), 1 câu về `can_review`.
